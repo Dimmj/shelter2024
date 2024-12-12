@@ -1,21 +1,22 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
-	"strconv"
+	"os"
 
-	_ "github.com/ncruces/go-sqlite3/driver"
+	"github.com/gorilla/sessions"
+	"github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/embed"
 )
 
-type user struct {
-	name     string
-	email    string
-	password string
+var store *sessions.CookieStore
+
+func init() {
+	os.Setenv("SECRET_SESSION", "secret_key")
+	store = sessions.NewCookieStore([]byte(os.Getenv("SESSION_SECRET")))
 }
 
 func home(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +24,13 @@ func home(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-
+	session, erro := store.Get(r, "session-name")
+	if erro != nil {
+		http.Error(w, erro.Error(), http.StatusInternalServerError)
+		return
+	}
+	session.Values["login"] = ""
+	session.Values["id"] = ""
 	// Используем функцию template.ParseFiles() для чтения файла шаблона.
 	// Если возникла ошибка, мы запишем детальное сообщение ошибки и
 	// используя функцию http.Error() мы отправим пользователю
@@ -43,29 +50,28 @@ func home(w http.ResponseWriter, r *http.Request) {
 		log.Println(err.Error())
 		http.Error(w, "Internal Server Error", 500)
 	}
-	if r.Method == http.MethodPost {
-		err := r.ParseForm()
-		if err != nil {
-			fmt.Fprintf(w, "ParseForm_error")
-			return
-		}
-		for key, values := range r.Form {
-			fmt.Printf("%s: %v\n", key, values)
-		}
-	}
 }
 
-func admin(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("This is admin"))
-}
-
-func advert(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.URL.Query().Get("id"))
-	if err != nil || id < 1 {
-		http.NotFound(w, r)
+func user(w http.ResponseWriter, r *http.Request) {
+	session, erro := store.Get(r, "session-name")
+	if erro != nil {
+		http.Error(w, erro.Error(), http.StatusInternalServerError)
 		return
 	}
-	fmt.Fprintf(w, "Объявление с id", id)
+	data := map[string]string{
+		"Login": session.Values["login"].(string),
+	}
+	ts, err := template.ParseFiles("../ui/html/user.tmpl")
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+	ts.ExecuteTemplate(w, "user.tmpl", data)
+}
+
+func redir(w http.ResponseWriter, r *http.Request, url string) {
+	http.Redirect(w, r, url, http.StatusSeeOther)
 }
 
 func enter(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +82,6 @@ func enter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		log.Println("geeet")
 		err = ts.Execute(w, nil)
 		if err != nil {
 			log.Println(err.Error())
@@ -84,19 +89,50 @@ func enter(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == http.MethodPost {
-		log.Println("poost")
+		session, erro := store.Get(r, "session-name")
+		if erro != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		err := r.ParseForm()
 		if err != nil {
 			fmt.Fprintf(w, "ParseForm_error")
 			return
 		}
-		//formData := make(map[string][]string)
+		formData := make(map[string][]string)
 		for key, values := range r.Form {
-			//formData[key] = values
+			formData[key] = values
 			fmt.Printf("%s: %v\n", key, values)
 		}
-		targetURL := "/admin"
-		http.Redirect(w, r, targetURL, http.StatusFound)
+
+		db, err := sqlite3.Open("../ui/static/All_db.db")
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+		us_exist, _, err := db.Prepare("SELECT id_user, login, password from log_pswd WHERE login = '" + formData["name"][0] + "'")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer us_exist.Close()
+		var ent_pass string
+		var id_user string
+		for us_exist.Step() {
+			ent_pass = us_exist.ColumnText(2)
+			id_user = us_exist.ColumnText(0)
+		}
+		if ent_pass == formData["password"][0] {
+			session.Values["login"] = formData["name"][0]
+			session.Values["id"] = id_user
+			err := session.Save(r, w)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			redir(w, r, "/user")
+		} else {
+			redir(w, r, "/enter")
+		}
 	}
 }
 
@@ -107,10 +143,12 @@ func registration(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", 500)
 		return
 	}
-	err = ts.Execute(w, nil)
-	if err != nil {
-		log.Println(err.Error())
-		http.Error(w, "Internal Server Error", 500)
+	if r.Method == http.MethodGet {
+		err = ts.Execute(w, nil)
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, "Internal Server Error", 500)
+		}
 	}
 	if r.Method == http.MethodPost {
 		err := r.ParseForm()
@@ -124,26 +162,70 @@ func registration(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("%s: %v\n", key, values)
 		}
 
-		db, err := sql.Open("sqlite3", "../ui/static/All_db.db")
+		db, err := sqlite3.Open("../ui/static/All_db.db")
 		if err != nil {
 			panic(err)
 		}
 		defer db.Close()
-		fmt.Println("insert into log_pswd (login, password, id_level, fio, tel) values ('" + formData["name"] + "', '" + formData["password"] + "', 1, NULL, NULL)")
-		_, err = db.Exec("insert into log_pswd (login, password, id_level, fio, tel) values ('" + formData["name"] + "', '" + formData["password"] + "', 1, NULL, NULL)")
+		err = db.Exec("insert into log_pswd (login, password, id_level, fio, tel) values ('" + formData["name"] + "', '" + formData["password"] + "', 2, NULL, NULL)")
 		if err != nil {
 			log.Fatal(err)
 		}
+		redir(w, r, "/")
+	}
+}
+
+func add_anim(w http.ResponseWriter, r *http.Request) {
+	session, erro := store.Get(r, "session-name")
+	if erro != nil {
+		http.Error(w, erro.Error(), http.StatusInternalServerError)
+		return
+	}
+	ts, err := template.ParseFiles("../ui/html/add_anim.tmpl")
+	if err != nil {
+		log.Println(err.Error())
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+	if r.Method == http.MethodGet {
+		err = ts.Execute(w, nil)
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, "Internal Server Error", 500)
+		}
+	}
+	if r.Method == http.MethodPost {
+		err := r.ParseForm()
+		if err != nil {
+			fmt.Fprintf(w, "ParseForm_error")
+			return
+		}
+		formData := make(map[string]string)
+		for key, values := range r.Form {
+			formData[key] = values[0]
+			fmt.Printf("%s: %v\n", key, values)
+		}
+
+		db, err := sqlite3.Open("../ui/static/All_db.db")
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+		err = db.Exec(fmt.Sprintf("insert into anim (id_user, anim, poroda, klicka, vozrast) values ('%s', '%s', '%s', '%s', '%s')", session.Values["id"].(string), formData["animal"], formData["poroda"], formData["name"], formData["age"]))
+		if err != nil {
+			log.Fatal(err)
+		}
+		redir(w, r, "/user")
 	}
 }
 
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", home)
-	mux.HandleFunc("/admin", admin)
-	mux.HandleFunc("/admin/advert", advert)
+	mux.HandleFunc("/user", user)
 	mux.HandleFunc("/registration", registration)
 	mux.HandleFunc("/enter", enter)
+	mux.HandleFunc("/add_anim", add_anim)
 
 	log.Println("Запуск веб-сервера на http://127.0.0.1:4000")
 	err := http.ListenAndServe(":4000", mux)
