@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+</head>
+<body>
+    <form method="post">
+        <label for="id_adv">id объявления, которое неоходимо удалить</label>
+        <input type="text" id="id_adv" name="id_adv" required>
+        <button type="submit">Удалить</button>
+    </form>
+    <h1> Hello, {{.Login}} </h1>
+    <ul>
+    <h4> id  user  email  телефон животное порода кличка возраст </h4> 
+    {{range .Data}}
+        <h4> {{ . }} </h4>
+    {{end}}
+    </ul>
+    <h3> <a href="/add_anim"> Добавить объявление </a> </h3>
+    <h3> <a href="/"> Выйти из аккаунта </a> </h3>
+</body>
+</html>
