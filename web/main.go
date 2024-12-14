@@ -32,6 +32,7 @@ func home(w http.ResponseWriter, r *http.Request) {
 	session.Values["login"] = ""
 	session.Values["id"] = ""
 	session.Values["level"] = ""
+	session.Values["id_up_adv"] = ""
 	err := session.Save(r, w)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -59,22 +60,25 @@ func home(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func get_all_adv() ([]string, error) {
+func get_all_adv() ([]string, [][]string, error) {
 	adv := []string{}
+	id_us := [][]string{}
 	db, err := sqlite3.Open("../ui/static/shelter.db")
 	if err != nil {
 		panic(err)
 	}
 	defer db.Close()
-	adv_sql, _, err := db.Prepare("select a.id_adv, u.login, u.email, u.telephone, a.animal, a.breed, a.anim_name, a.age from advertisement a join users u on a.id_user = u.id_user")
+	adv_sql, _, err := db.Prepare("select a.id_adv, u.login, u.email, u.telephone, a.animal, a.breed, a.anim_name, a.age, a.id_user from advertisement a join users u on a.id_user = u.id_user")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer adv_sql.Close()
 	for adv_sql.Step() {
 		adv = append(adv, adv_sql.ColumnText(0)+"\t"+adv_sql.ColumnText(1)+"\t"+adv_sql.ColumnText(2)+"\t"+adv_sql.ColumnText(3)+"\t"+adv_sql.ColumnText(4)+"\t"+adv_sql.ColumnText(5)+"\t"+adv_sql.ColumnText(6)+"\t"+adv_sql.ColumnText(7))
+		hh := []string{adv_sql.ColumnText(0), adv_sql.ColumnText(8)}
+		id_us = append(id_us, hh)
 	}
-	return adv, nil
+	return adv, id_us, nil
 }
 
 func user(w http.ResponseWriter, r *http.Request) {
@@ -100,8 +104,8 @@ func user(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal Server Error", 500)
 			return
 		}
+		adv, id_us, _ := get_all_adv()
 		if r.Method == http.MethodGet {
-			adv, _ := get_all_adv()
 			data := map[string]interface{}{
 				"Login": session.Values["login"].(string),
 				"Data":  adv,
@@ -114,6 +118,8 @@ func user(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, "ParseForm_error")
 				return
 			}
+			action := r.FormValue("action")
+			fmt.Println(action)
 			formData := make(map[string][]string)
 			for key, values := range r.Form {
 				formData[key] = values
@@ -124,11 +130,34 @@ func user(w http.ResponseWriter, r *http.Request) {
 				panic(err)
 			}
 			defer db.Close()
-			err = db.Exec(fmt.Sprintf("delete from advertisement where id_adv = %s", formData["id_adv"][0]))
-			if err != nil {
-				log.Fatal(err)
+			if action == "delete" {
+				err = db.Exec(fmt.Sprintf("delete from advertisement where id_adv = %s", formData["id_adv"][0]))
+				if err != nil {
+					log.Fatal(err)
+				}
+				redir(w, r, "/user")
 			}
-			redir(w, r, "/user")
+			if action == "update" {
+				var flag bool = false
+				for _, value := range id_us {
+					if formData["id_adv"][0] == value[0] && session.Values["id"] == value[1] {
+						flag = true
+					}
+				}
+				if flag {
+					session.Values["id_up_adv"] = formData["id_adv"][0]
+					err := session.Save(r, w)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					redir(w, r, "/update")
+					fmt.Println("yes")
+				} else {
+					fmt.Println("no")
+				}
+				redir(w, r, "/user")
+			}
 		}
 	}
 }
@@ -368,6 +397,52 @@ func get_all_users() ([]string, error) {
 	return adv, nil
 }
 
+func update_adv(w http.ResponseWriter, r *http.Request) {
+	session, erro := store.Get(r, "session-name")
+	if erro != nil {
+		http.Error(w, erro.Error(), http.StatusInternalServerError)
+		return
+	}
+	if session.Values["login"] != "" {
+		ts, err := template.ParseFiles("../ui/html/update.tmpl")
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, "Internal Server Error", 500)
+			return
+		}
+		if r.Method == http.MethodGet {
+			err = ts.Execute(w, nil)
+			if err != nil {
+				log.Println(err.Error())
+				http.Error(w, "Internal Server Error", 500)
+			}
+		}
+		if r.Method == http.MethodPost {
+			err := r.ParseForm()
+			if err != nil {
+				fmt.Fprintf(w, "ParseForm_error")
+				return
+			}
+			formData := make(map[string]string)
+			for key, values := range r.Form {
+				formData[key] = values[0]
+				fmt.Printf("%s: %v\n", key, values)
+			}
+
+			db, err := sqlite3.Open("../ui/static/shelter.db")
+			if err != nil {
+				panic(err)
+			}
+			defer db.Close()
+			err = db.Exec(fmt.Sprintf("update advertisement set anim_name = '%s', age = '%s' where id_adv = %s", formData["name"], formData["age"], session.Values["id_up_adv"]))
+			if err != nil {
+				log.Fatal(err)
+			}
+			redir(w, r, "/user")
+		}
+	}
+}
+
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", home)
@@ -376,6 +451,7 @@ func main() {
 	mux.HandleFunc("/enter", enter)
 	mux.HandleFunc("/add_anim", add_anim)
 	mux.HandleFunc("/user_manage", user_management)
+	mux.HandleFunc("/update", update_adv)
 
 	log.Println("Запуск веб-сервера на http://127.0.0.1:4000")
 	err := http.ListenAndServe(":4000", mux)

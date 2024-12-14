@@ -4,10 +4,14 @@
     <meta charset="UTF-8">
 </head>
 <body>
-    <form method="post">
-        <label for="id_adv">id объявления, которое неоходимо удалить</label>
-        <input type="text" id="id_adv" name="id_adv" required>
-        <button type="submit">Удалить</button>
+    <form method="POST">
+        <label for="id_adv">id объявление для взаимодействия</label>
+            <input type="text" id="id_adv" name="id_adv" required>
+	    <br>
+            <button type="submit" name="action" value="delete">Удалить</button> 
+            <br>
+            <button type="submit" name="action" value="update">Изменить объявление</button>
+            <br>
     </form>
     <h1> Hello, {{.Login}} </h1>
     <ul>
